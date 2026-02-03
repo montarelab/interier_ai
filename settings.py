@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     LOG_LEVEL: Literal["DEBUG", "INFO", "ERROR"] = "INFO"
     OPENAI_API_KEY: str
+    GEMINI_API_KEY: str
     OPENROUTER_API_KEY: str
     OPENROUTER_BASE_URL: str
     LANGSMITH_API_KEY: str
