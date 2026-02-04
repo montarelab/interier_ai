@@ -1,6 +1,7 @@
 import asyncio
 import itertools
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -20,6 +21,15 @@ DATASET_PATH = Path("dataset")
 app = FastAPI()
 
 image_gen_pipeline_service = ImageGenPipelineClient()
+
+bg_tasks_list: list[asyncio.Task] = []
+bg_tasks_lock = threading.Lock()
+
+
+def remove_done_task(task: asyncio.Task):
+    """Callback that runs after the background task is done. It is used in order to garbage collector didn't delete background tasks."""
+    with bg_tasks_lock:
+        bg_tasks_list.remove(task)
 
 
 def get_img_pipeline_service():
@@ -41,6 +51,15 @@ def get_image_path(task: str) -> Path:
     return DATASET_PATH / task / "image.png"
 
 
+def init_job_path() -> Path:
+    """Initializes job ID, creates a folder for job results, and returns the path."""
+    job_dt = datetime.now().isoformat()
+    job_id = uuid4()
+    job_path = Path("jobs") / f"{job_dt}_{job_id}"
+    job_path.mkdir(parents=True, exist_ok=True)
+    return job_path
+
+
 @app.post("/generate")
 async def generate(
     pipeline: ImageGenPipelineDep,
@@ -50,10 +69,7 @@ async def generate(
     """Generate POST endpoint. Takes string prompt and image and generates an image."""
     try:
         logger.info(f"Geneate request.")
-        job_dt = datetime.now().isoformat()
-        job_id = uuid4()
-        job_path = Path("jobs") / f"{job_dt}_{job_id}"
-        job_path.mkdir(parents=True, exist_ok=True)
+        job_path = init_job_path()
 
         contents = await image.read()
         suffix = image.filename.split(".")[-1]
@@ -97,26 +113,29 @@ async def run_eval(job_path: Path, tasks: list[asyncio.Task]):
 async def evaluate(pipeline: ImageGenPipelineDep, payload: EvalConfigPayload):
     """Evaluate POST endpoint. Takes evaluation details and works asynchronously."""
     try:
-        logger.info(f"Payload: \n{payload.model_dump_json(indent=4)}")
+        logger.info(
+            f"Evaluation request. Payload: \n{payload.model_dump_json(indent=4)}"
+        )
         product = itertools.product(
             payload.model_names, payload.tasks, payload.versions
         )
-        job_dt = datetime.now().isoformat()
-        job_id = uuid4()
-        job_path = Path("jobs") / f"{job_dt}_{job_id}"
-        job_path.mkdir(parents=True, exist_ok=True)
+        job_path = init_job_path()
 
         async with aiofiles.open(job_path / "payload.json", "w") as f:
             await f.write(payload.model_dump_json(indent=4))
 
-        product_len: int = 0
+        product_len: int = (
+            len(payload.model_names) * len(payload.tasks) * len(payload.versions)
+        )
         tasks: list[asyncio.Task] = []
+        logger.info(f"Total tasks: {product_len}")
 
         for item in product:
             model, task, version = item[0], item[1], item[2]
             prompt_path = get_prompt_path(task, version)
             user_prompt = prompt_path.read_text(encoding="utf-8")
-            result_path = job_path / f"{task}_v{version}"
+            result_dir_path = job_path / f"{task}_v{version}"
+            result_dir_path.mkdir(exist_ok=True, parents=True)
 
             tasks.append(
                 asyncio.create_task(
@@ -124,14 +143,15 @@ async def evaluate(pipeline: ImageGenPipelineDep, payload: EvalConfigPayload):
                         model=model,
                         user_prompt=user_prompt,
                         image_path=get_image_path(task),
-                        result_path=result_path,
+                        result_dir_path=result_dir_path,
                     )
                 )
             )
-            product_len += 1
 
-        logger.info(f"Total tasks: {product_len}")
-        asyncio.create_task(run_eval(job_path=job_path, tasks=tasks))
+        bg_task = asyncio.create_task(run_eval(job_path=job_path, tasks=tasks))
+        bg_task.add_done_callback(remove_done_task)
+        bg_tasks_list.append(bg_task)
+
         return {
             "status": "started",
             "total_tasks": product_len,
