@@ -27,6 +27,7 @@ JUDGE_PROMPT_PATH = Path("prompts/img_judge.jinja")
 PLANNER_PROMPT_PATH = Path("prompts/prompt_enhancer.jinja")
 
 logger = logging.getLogger(__name__)
+env = Environment(loader=FileSystemLoader("prompts"))
 
 
 def standardize_name(name: str) -> str:
@@ -49,16 +50,9 @@ class ImageGenPipelineClient:
         self.openai_semaphore = asyncio.Semaphore(SEMAPHORE_VAL)
         self.google_semaphore = asyncio.Semaphore(SEMAPHORE_VAL)
 
-        env = Environment(loader=FileSystemLoader("prompts"))
-
-        img_gen_prompt = IMG_GEN_PROMPT_PATH.read_text(encoding="utf-8")
-        self.img_gen_template = env.from_string(img_gen_prompt)
-
-        judge_prompt_str = JUDGE_PROMPT_PATH.read_text(encoding="utf-8")
-        self.judge_template = env.from_string(judge_prompt_str)
-
-        planner_prompt_str = PLANNER_PROMPT_PATH.read_text(encoding="utf-8")
-        self.planner_template = env.from_string(planner_prompt_str)
+        self.img_gen_template = env.get_template("img_gen.jinja")
+        self.judge_template = env.get_template("img_judge.jinja")
+        self.planner_template = env.get_template("prompt_enhancer.jinja")
 
         self.eval_model = "gpt-5-mini"
         self.planner_model = "gpt-5-mini"
