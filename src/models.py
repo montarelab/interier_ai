@@ -109,5 +109,5 @@ class AppResultsModel(BaseModel):
     usages: list[UsageMetadata]
     plan_gen_duration_sec: float
     img_gen_duration_sec: list[float]
-    img_eval_duration_sec: float
-    judge: ImageEvalResponse
+    img_eval_duration_sec: list[float]
+    evals: list[ImageEvalResponse]

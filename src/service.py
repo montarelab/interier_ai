@@ -226,7 +226,7 @@ class ImageGenPipelineClient:
             # TODO several usages need to be here
             app_response = AppResultsModel(
                 usages=[plan_usage, img_gen_usage, eval_usage],
-                judge=eval_response,
+                evals=eval_response,
                 plan_gen_duration_sec=plan_gen_seconds,
                 img_gen_duration_sec=[img_gen_seconds],
                 img_eval_duration_sec=img_eval_seconds,

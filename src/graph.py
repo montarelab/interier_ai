@@ -4,9 +4,10 @@ import json
 import logging
 import mimetypes
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Annotated, Literal, TypedDict
 from uuid import uuid4
 
 import aiofiles
@@ -17,7 +18,7 @@ from langgraph.types import Command, Send
 from openai import AsyncClient
 from PIL import Image
 
-from src.models import ImageEvalResponse, PlanResponse, UsageMetadata
+from src.models import AppResultsModel, ImageEvalResponse, PlanResponse, UsageMetadata
 from src.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -53,10 +54,12 @@ class GraphState(TypedDict):
     images: list[str]
     job_path: Path
     plan_gen_duration_sec: float
-    img_gen_duration_sec: asyncio.Queue[float]
-    img_eval_duration_sec: asyncio.Queue[float]
-    token_usage_queue: asyncio.Queue[UsageMetadata]
+    img_gen_duration_sec: Annotated[list[float], list.append]
+    img_eval_duration_sec: Annotated[list[float], list.append]
+    token_usages: Annotated[list[UsageMetadata], list.append]
+    eval_responses: Annotated[list[ImageEvalResponse], list.append]
     specific_img_details: str
+    img_data_url: str
 
 
 @dataclass
@@ -112,12 +115,10 @@ async def plan(state: GraphState, runtime: RuntimeContext):
             plan_gen_seconds = time.perf_counter() - t0
 
         logger.info(f"Interrier plan was generated. Duration: {plan_gen_seconds}s")
-        usage = UsageMetadata.from_openai_usage(response.usage)
-        await state["token_usage_queue"].put(usage)
-
         async with aiofiles.open(state["job_path"] / "plan.json", "w") as f:
             await f.write(response.output_parsed.model_dump_json(indent=4))
 
+        usage = UsageMetadata.from_openai_usage(response.usage)
         return Send(
             "init_image_gen",
             {
@@ -129,6 +130,7 @@ async def plan(state: GraphState, runtime: RuntimeContext):
                     if response.output_parsed.images
                     else ""
                 ),
+                "token_usages": [usage],
             },
         )
     except Exception:
@@ -229,21 +231,85 @@ async def image_gen(
             img_bytes = base64.b64decode(response.img_base64)
             await f.write(img_bytes)
 
-        await state["token_usage_queue"].put(response.usage)
-        await state["img_gen_duration_sec"].put(response.img_gen_seconds)
-
-        return Command(goto="eval_image", update={})
+        return Command(
+            goto="eval_image",
+            update={
+                "img_data_url": f"data:image/png;base64,{response.img_base64}",
+                "token_usages": [response.usage],
+                "img_gen_duration_sec": [response.img_gen_seconds],
+            },
+        )
     except Exception as e:
         logger.exception(f"Error occured during image generation")
         raise
 
 
 async def eval_image(state: GraphState, context: RuntimeContext):
-    """"""
+    """Evaluate image."""
+    try:
+        prompt = await render_template_async(
+            "img_judge.jinja", user_prompt=state["enhanced_prompt"]
+        )
+        async with openai_semaphore:
+            t0 = time.perf_counter()
+            response = await openai_client.responses.parse(
+                model=EVAL_MODEL,
+                text_format=ImageEvalResponse,
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": prompt},
+                            {"type": "input_image", "image_url": state["img_data_url"]},
+                        ],
+                    }
+                ],
+            )
+            img_eval_seconds = time.perf_counter() - t0
+            logger.info(f"Image was evaluated. Duration: {img_eval_seconds}s")
+        return {
+            **state,
+            "eval_responses": [response],
+            "img_eval_duration_sec": [img_eval_seconds],
+        }
+    except Exception:
+        logger.exception("Error occured during LLM judgement.")
 
 
-async def final_per_image(state: GraphState, context: RuntimeContext):
-    """"""
+def group_usages(usages: list[UsageMetadata]) -> dict[str, list[UsageMetadata]]:
+    groups = defaultdict(list)
+    for usage in usages:
+        groups[usage.model].append(usage)
+    return dict(groups)
+
+
+def compound_usages(usages: list[UsageMetadata]) -> list[UsageMetadata]:
+    groups = group_usages(usages)
+    return [
+        UsageMetadata(
+            model=model,
+            input_tokens=sum([u.input_tokens for u in model_usages]),
+            output_tokens=sum([u.output_tokens for u in model_usages]),
+            output_tokens=sum([u.total_tokens for u in model_usages]),
+        )
+        for model, model_usages in groups.items()
+    ]
+
+
+async def finalize(state: GraphState, context: RuntimeContext):
+    """Finalize graph execution."""
+    usages = compound_usages(state["token_usages"])
+    app_response = AppResultsModel(
+        usages=usages,
+        evals=state["eval_responses"],
+        plan_gen_duration_sec=state["plan_gen_duration_sec"],
+        img_gen_duration_sec=state["img_gen_duration_sec"],
+        img_eval_duration_sec=state["img_gen_duration_sec"],
+    )
+    result_json_path = state["result_path"] / "results.json"
+    async with aiofiles.open(result_json_path, "w") as f:
+        await f.write(app_response.model_dump_json(indent=4))
+    logger.info(f"The results were stored.")
 
 
 async def init_image_gen(state: GraphState, context: RuntimeContext):
@@ -260,30 +326,38 @@ async def build_graph():
     graph_builder.add_node("init_image_gen", init_image_gen)
     graph_builder.add_node("later_image_gen", later_image_gen)
     graph_builder.add_node("eval_image", eval_image)
-    graph_builder.add_node("final_per_image", final_per_image)
+    graph_builder.add_node("finalize", finalize)
 
     graph_builder.add_edge(START, "plan")
     graph_builder.add_edge("plan", "init_image_gen")
 
     def fanout_after_init(state: GraphState):
-        if len(state["images"]) == 1:
-            return "final_per_image"
-
-        return [
-            Send(
-                "later_image_gen",
-                {"specific_img_details": details},
+        sends = ["eval_image"]
+        if len(state["images"]) > 1:
+            sends.extend(
+                [
+                    Send(
+                        "later_image_gen",
+                        {"specific_img_details": details},
+                    )
+                    for details in state["images"]
+                ]
             )
-            for details in state["images"]
-        ]
+        return sends
 
     graph_builder.add_conditional_edges(
-        "init_image_gen", fanout_after_init, ["later_image_gen", "final_per_image"]
+        "init_image_gen", fanout_after_init, ["later_image_gen", "eval_image"]
     )
     graph_builder.add_edge("later_image_gen", "eval_image")
 
-    # TODO should "final" wait for all "eval"s?
-    graph_builder.add_edge("eval_image", "final_per_image")
-    graph_builder.add_edge("final_per_image", END)
+    def maybe_finalize(state: GraphState):
+        if len(state["eval_responses"]) != len(state["images"]):
+            return None
+
+        return "finalize"
+
+    graph_builder.add_conditional_edges("eval_image", maybe_finalize, ["finalize"])
+    graph_builder.add_edge("eval_image", "finalize")
+    graph_builder.add_edge("finalize", END)
 
     return graph_builder.compile()
