@@ -33,11 +33,6 @@ from src.utils import (
 logger = logging.getLogger(__name__)
 
 SEMAPHORE_VAL = 5
-EVAL_MODEL = "gpt-5-mini"
-PLAN_MODEL = "gpt-5-mini"
-DEFAULT_IMG_GEN_MODEL = "gpt-image-1-mini"
-
-
 openai_semaphore = asyncio.Semaphore(SEMAPHORE_VAL)
 google_semaphore = asyncio.Semaphore(SEMAPHORE_VAL)
 openai_client = AsyncClient(api_key=settings.OPENAI_API_KEY)
@@ -85,7 +80,7 @@ class ImgGenResponse:
 def init_graph_state(
     prompt: str, user_image_path: Path, result_path: Path, llm_model: str | None = None
 ) -> GraphState:
-    llm_model = llm_model if llm_model else DEFAULT_IMG_GEN_MODEL
+    llm_model = llm_model if llm_model else settings.IMG_GEN_MODEL
     return DEFAULT_GRAPH_STATE | {
         "user_prompt": prompt,
         "user_image_path": user_image_path,
@@ -108,7 +103,7 @@ async def plan(state: GraphState):
         async with openai_semaphore:
             t0 = time.perf_counter()
             response = await openai_client.responses.parse(
-                model=PLAN_MODEL,
+                model=settings.PLAN_MODEL,
                 text_format=PlanResponse,
                 input=[
                     {
@@ -128,7 +123,7 @@ async def plan(state: GraphState):
         async with aiofiles.open(state["result_path"] / "plan.json", "w") as f:
             await f.write(response.output_parsed.model_dump_json(indent=4))
 
-        usage = UsageMetadata.from_openai_usage(PLAN_MODEL, response.usage)
+        usage = UsageMetadata.from_openai_usage(settings.PLAN_MODEL, response.usage)
         return Command(
             goto="init_image_gen",
             update={
@@ -252,11 +247,11 @@ async def eval_image(state: GraphState):
         img_data_url = state["img_data_url"][-1]
         current_img_descriptor = state["current_img_descriptor"]
         user_prompt = f"{state["enhanced_prompt"]}\n{current_img_descriptor}"
-        prompt = await render_template_async("img_judge.jinja", user_prompt=user_prompt)
+        prompt = await render_template_async("eval.jinja", user_prompt=user_prompt)
         async with openai_semaphore:
             t0 = time.perf_counter()
             response = await openai_client.responses.parse(
-                model=EVAL_MODEL,
+                model=settings.EVAL_MODEL,
                 text_format=ImageEvalResponse,
                 input=[
                     {
@@ -273,7 +268,7 @@ async def eval_image(state: GraphState):
             )
             img_eval_seconds = time.perf_counter() - t0
             logger.info(f"Image was evaluated. Duration: {img_eval_seconds}s")
-            usage = UsageMetadata.from_openai_usage(EVAL_MODEL, response.usage)
+            usage = UsageMetadata.from_openai_usage(settings.EVAL_MODEL, response.usage)
         return Command(
             update={
                 "eval_responses": [response.output_parsed],

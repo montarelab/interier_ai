@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str | None
     OPENROUTER_BASE_URL: str | None
     LANGSMITH_API_KEY: str | None
+    EVAL_MODEL: str
+    PLAN_MODEL: str
+    IMG_GEN_MODEL: str
 
 
 settings = Settings(_env_file=".env")
