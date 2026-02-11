@@ -10,6 +10,7 @@ from uuid import uuid4
 import aiofiles
 from fastapi import Depends, FastAPI, File, Form, UploadFile
 
+from src.graph import build_graph
 from src.models import EvalConfigPayload
 from src.service import ImageGenPipelineClient
 
@@ -61,11 +62,7 @@ def init_job_path() -> Path:
 
 
 @app.post("/generate")
-async def generate(
-    pipeline: ImageGenPipelineDep,
-    prompt: str = Form(None),
-    image: UploadFile = File(...),
-):
+async def generate(prompt: str = Form(None), image: UploadFile = File(...)):
     """Generate POST endpoint. Takes string prompt and image and generates an image."""
     try:
         logger.info(f"Geneate request.")
@@ -77,7 +74,7 @@ async def generate(
         async with aiofiles.open(src_img_path, "wb") as f:
             await f.write(contents)
 
-        async with aiofiles.open(job_path / "user_prompt.md", "wb") as f:
+        async with aiofiles.open(job_path / "user_prompt.md", "w") as f:
             await f.write(prompt)
 
         logger.info(f"Saved request details.")
@@ -85,14 +82,22 @@ async def generate(
         result_dir_path = job_path / "result"
         result_dir_path.mkdir(parents=True, exist_ok=True)
 
-        await pipeline.handle_image(
-            model=None,
-            user_prompt=prompt,
-            image_path=src_img_path,
-            result_dir_path=result_dir_path,
+        graph = build_graph()
+        response = await graph.ainvoke(
+            input={
+                "user_prompt": prompt,
+                "user_image_path": src_img_path,
+                "result_path": result_dir_path,
+                "llm_model": "gpt-image-1-mini",
+                "img_gen_duration_sec": [],
+                "img_eval_duration_sec": [],
+                "token_usages": [],
+                "eval_responses": [],
+            }
         )
         return {"status": "success", "job_path": job_path.expanduser().resolve()}
     except Exception:
+        logger.exception(f"Error during generate request.")
         return {"status": "failed"}
 
 
@@ -158,4 +163,5 @@ async def evaluate(pipeline: ImageGenPipelineDep, payload: EvalConfigPayload):
             "job_path": job_path.expanduser().resolve(),
         }
     except Exception:
+        logger.exception(f"Error during generate request.")
         return {"status": "failed"}

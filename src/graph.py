@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 SEMAPHORE_VAL = 5
 PROMPTS_PATH = Path("prompts")
 EVAL_MODEL = "gpt-5-mini"
-PLANNER_MODEL = "gpt-5-mini"
+PLAN_MODEL = "gpt-5-mini"
 
 env = Environment(loader=FileSystemLoader("prompts"))
 openai_semaphore = asyncio.Semaphore(SEMAPHORE_VAL)
@@ -52,7 +52,7 @@ class GraphState(TypedDict):
     user_image_path: Path
     init_image_path: Path
     images: list[str]
-    job_path: Path
+    plan_response: PlanResponse
     plan_gen_duration_sec: float
     img_gen_duration_sec: Annotated[list[float], list.append]
     img_eval_duration_sec: Annotated[list[float], list.append]
@@ -60,11 +60,6 @@ class GraphState(TypedDict):
     eval_responses: Annotated[list[ImageEvalResponse], list.append]
     specific_img_details: str
     img_data_url: str
-
-
-@dataclass
-class RuntimeContext:
-    """"""
 
 
 async def img_path_to_data_url(img_path: Path) -> str:
@@ -87,9 +82,10 @@ async def render_template_async(template_name: str, **context) -> str:
     return template.render(**context)
 
 
-async def plan(state: GraphState, runtime: RuntimeContext):
+async def plan(state: GraphState):
     """Plan the further actions."""
     try:
+        logger.info(f"Plan generation started.")
         eval_schema = ImageEvalResponse.model_json_schema()
         prompt = await render_template_async(
             "plan.jinja",
@@ -100,7 +96,7 @@ async def plan(state: GraphState, runtime: RuntimeContext):
         async with openai_semaphore:
             t0 = time.perf_counter()
             response = await openai_client.responses.parse(
-                model=PLANNER_MODEL,
+                model=PLAN_MODEL,
                 text_format=PlanResponse,
                 input=[
                     {
@@ -114,14 +110,16 @@ async def plan(state: GraphState, runtime: RuntimeContext):
             )
             plan_gen_seconds = time.perf_counter() - t0
 
-        logger.info(f"Interrier plan was generated. Duration: {plan_gen_seconds}s")
-        async with aiofiles.open(state["job_path"] / "plan.json", "w") as f:
+        logger.info(
+            f"Interrier plan was generated. Requested images: {len(response.output_parsed.images)} Duration: {plan_gen_seconds}s"
+        )
+        async with aiofiles.open(state["result_path"] / "plan.json", "w") as f:
             await f.write(response.output_parsed.model_dump_json(indent=4))
 
-        usage = UsageMetadata.from_openai_usage(response.usage)
-        return Send(
-            "init_image_gen",
-            {
+        usage = UsageMetadata.from_openai_usage(PLAN_MODEL, response.usage)
+        return Command(
+            goto="init_image_gen",
+            update={
                 "enhanced_prompt": response.output_parsed.improved_prompt,
                 "images": response.output_parsed.images,
                 "plan_gen_duration_sec": plan_gen_seconds,
@@ -131,6 +129,7 @@ async def plan(state: GraphState, runtime: RuntimeContext):
                     else ""
                 ),
                 "token_usages": [usage],
+                "plan_response": response,
             },
         )
     except Exception:
@@ -189,9 +188,7 @@ async def openai_img_gen(
     )
 
 
-async def image_gen(
-    state: GraphState, context: RuntimeContext, gen_mode: Literal["init", "later"]
-):
+async def image_gen(state: GraphState, gen_mode: Literal["init", "later"]):
     """Geneates an image based on user's prompt and prefernce image."""
     try:
         if gen_mode == "init":
@@ -207,6 +204,7 @@ async def image_gen(
             specific_details=state["specific_img_details"],
         )
         model = state["llm_model"]
+        logger.info(f"Image generation with model '{model}' was started.")
         if "gemini" in model:
             response = await google_img_gen(
                 model=model,
@@ -231,20 +229,25 @@ async def image_gen(
             img_bytes = base64.b64decode(response.img_base64)
             await f.write(img_bytes)
 
+        update_dict = {
+            "img_data_url": f"data:image/png;base64,{response.img_base64}",
+            "token_usages": [response.usage],
+            "img_gen_duration_sec": [response.img_gen_seconds],
+        }
+
+        if gen_mode == "init":
+            update_dict["init_image_path"] = result_img_path
+
         return Command(
             goto="eval_image",
-            update={
-                "img_data_url": f"data:image/png;base64,{response.img_base64}",
-                "token_usages": [response.usage],
-                "img_gen_duration_sec": [response.img_gen_seconds],
-            },
+            update=update_dict,
         )
     except Exception as e:
         logger.exception(f"Error occured during image generation")
         raise
 
 
-async def eval_image(state: GraphState, context: RuntimeContext):
+async def eval_image(state: GraphState):
     """Evaluate image."""
     try:
         prompt = await render_template_async(
@@ -267,11 +270,14 @@ async def eval_image(state: GraphState, context: RuntimeContext):
             )
             img_eval_seconds = time.perf_counter() - t0
             logger.info(f"Image was evaluated. Duration: {img_eval_seconds}s")
-        return {
-            **state,
-            "eval_responses": [response],
-            "img_eval_duration_sec": [img_eval_seconds],
-        }
+            usage = UsageMetadata.from_openai_usage(EVAL_MODEL, response.usage)
+        return Command(
+            update={
+                "eval_responses": [response],
+                "img_eval_duration_sec": [img_eval_seconds],
+                "token_usages": [usage],
+            }
+        )
     except Exception:
         logger.exception("Error occured during LLM judgement.")
 
@@ -290,13 +296,13 @@ def compound_usages(usages: list[UsageMetadata]) -> list[UsageMetadata]:
             model=model,
             input_tokens=sum([u.input_tokens for u in model_usages]),
             output_tokens=sum([u.output_tokens for u in model_usages]),
-            output_tokens=sum([u.total_tokens for u in model_usages]),
+            total_tokens=sum([u.total_tokens for u in model_usages]),
         )
         for model, model_usages in groups.items()
     ]
 
 
-async def finalize(state: GraphState, context: RuntimeContext):
+async def finalize(state: GraphState):
     """Finalize graph execution."""
     usages = compound_usages(state["token_usages"])
     app_response = AppResultsModel(
@@ -304,7 +310,8 @@ async def finalize(state: GraphState, context: RuntimeContext):
         evals=state["eval_responses"],
         plan_gen_duration_sec=state["plan_gen_duration_sec"],
         img_gen_duration_sec=state["img_gen_duration_sec"],
-        img_eval_duration_sec=state["img_gen_duration_sec"],
+        img_eval_duration_sec=state["img_eval_duration_sec"],
+        plan_response=state["plan_response"],
     )
     result_json_path = state["result_path"] / "results.json"
     async with aiofiles.open(result_json_path, "w") as f:
@@ -312,16 +319,16 @@ async def finalize(state: GraphState, context: RuntimeContext):
     logger.info(f"The results were stored.")
 
 
-async def init_image_gen(state: GraphState, context: RuntimeContext):
-    return await image_gen(state, context, "init")
+async def init_image_gen(state: GraphState):
+    return await image_gen(state, "init")
 
 
-async def later_image_gen(state: GraphState, context: RuntimeContext):
-    return await image_gen(state, context, "later")
+async def later_image_gen(state: GraphState):
+    return await image_gen(state, "later")
 
 
-async def build_graph():
-    graph_builder = StateGraph(GraphState, context_schema=RuntimeContext)
+def build_graph():
+    graph_builder = StateGraph(GraphState)
     graph_builder.add_node("plan", plan)
     graph_builder.add_node("init_image_gen", init_image_gen)
     graph_builder.add_node("later_image_gen", later_image_gen)
@@ -332,7 +339,7 @@ async def build_graph():
     graph_builder.add_edge("plan", "init_image_gen")
 
     def fanout_after_init(state: GraphState):
-        sends = ["eval_image"]
+        sends = [Send("eval_image", {})]
         if len(state["images"]) > 1:
             sends.extend(
                 [
@@ -351,13 +358,13 @@ async def build_graph():
     graph_builder.add_edge("later_image_gen", "eval_image")
 
     def maybe_finalize(state: GraphState):
-        if len(state["eval_responses"]) != len(state["images"]):
-            return None
-
-        return "finalize"
+        return (
+            "finalize" if len(state["eval_responses"]) != len(state["images"]) else None
+        )
 
     graph_builder.add_conditional_edges("eval_image", maybe_finalize, ["finalize"])
-    graph_builder.add_edge("eval_image", "finalize")
     graph_builder.add_edge("finalize", END)
 
-    return graph_builder.compile()
+    graph = graph_builder.compile()
+    logger.info(f"Graph was compiled.")
+    return graph

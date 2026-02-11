@@ -17,3 +17,15 @@ uv run uvicorn src.main:app --host localhost --port 5000
 ## Data requirements
 
 5 cases of Prompt + Reference Image
+
+Run:
+
+```
+uv run uvicorn src.main:app --port 5000 --host localhost
+```
+
+or 
+
+```
+bash run.sh
+```

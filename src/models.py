@@ -111,3 +111,4 @@ class AppResultsModel(BaseModel):
     img_gen_duration_sec: list[float]
     img_eval_duration_sec: list[float]
     evals: list[ImageEvalResponse]
+    plan_response: PlanResponse

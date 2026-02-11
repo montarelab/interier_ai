@@ -33,21 +33,21 @@ class ImageGenPipelineClient:
 
     def __init__(self):
         """Initializes main service components."""
-        self.openai_client = AsyncClient(api_key=settings.OPENAI_API_KEY)
-        self.gemini_client = genai.Client()
+        # self.openai_client = AsyncClient(api_key=settings.OPENAI_API_KEY)
+        # self.gemini_client = genai.Client()
 
-        self.token_usage_list: list[UsageMetadata] = []
-        self.token_usage_lock = asyncio.Lock()
+        # self.token_usage_list: list[UsageMetadata] = []
+        # self.token_usage_lock = asyncio.Lock()
 
-        self.openai_semaphore = asyncio.Semaphore(SEMAPHORE_VAL)
-        self.google_semaphore = asyncio.Semaphore(SEMAPHORE_VAL)
+        # self.openai_semaphore = asyncio.Semaphore(SEMAPHORE_VAL)
+        # self.google_semaphore = asyncio.Semaphore(SEMAPHORE_VAL)
 
-        self.img_gen_template = env.get_template("img_gen.jinja")
-        self.judge_template = env.get_template("img_judge.jinja")
-        self.planner_template = env.get_template("prompt_enhancer.jinja")
+        # self.img_gen_template = env.get_template("img_gen.jinja")
+        # self.judge_template = env.get_template("img_judge.jinja")
+        # self.planner_template = env.get_template("prompt_enhancer.jinja")
 
-        self.eval_model = "gpt-5-mini"
-        self.planner_model = "gpt-5-mini"
+        # self.eval_model = "gpt-5-mini"
+        # self.planner_model = "gpt-5-mini"
 
     async def eval_image(
         self, user_prompt: str, img_data_url: str
