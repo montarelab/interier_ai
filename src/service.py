@@ -13,18 +13,10 @@ from jinja2 import Environment, FileSystemLoader
 from openai import AsyncClient
 from PIL import Image
 
-from src.models import (
-    AppResultsModel,
-    ImageJudgeResponse,
-    PromptEnhancementResponse,
-    UsageMetadata,
-)
+from src.models import AppResultsModel, ImageEvalResponse, PlanResponse, UsageMetadata
 from src.settings import settings
 
 SEMAPHORE_VAL = 5
-IMG_GEN_PROMPT_PATH = Path("prompts/img_gen.jinja")
-JUDGE_PROMPT_PATH = Path("prompts/img_judge.jinja")
-PLANNER_PROMPT_PATH = Path("prompts/prompt_enhancer.jinja")
 
 logger = logging.getLogger(__name__)
 env = Environment(loader=FileSystemLoader("prompts"))
@@ -59,7 +51,7 @@ class ImageGenPipelineClient:
 
     async def eval_image(
         self, user_prompt: str, img_data_url: str
-    ) -> tuple[ImageJudgeResponse, UsageMetadata]:
+    ) -> tuple[ImageEvalResponse, UsageMetadata]:
         """
         Evaluates generated image using LLM-as-a-judge based on user's prompt and other metrics.
         Returns LLM's structured output.
@@ -69,7 +61,7 @@ class ImageGenPipelineClient:
                 judge_prompt = self.judge_template.render(user_prompt=user_prompt)
                 response = await self.openai_client.responses.parse(
                     model=self.eval_model,
-                    text_format=ImageJudgeResponse,
+                    text_format=ImageEvalResponse,
                     input=[
                         {
                             "role": "user",
@@ -141,9 +133,9 @@ class ImageGenPipelineClient:
 
     async def plan_work(
         self, user_prompt: str, img_data_url: str
-    ) -> tuple[PromptEnhancementResponse, UsageMetadata]:
+    ) -> tuple[PlanResponse, UsageMetadata]:
         try:
-            eval_schema = ImageJudgeResponse.model_json_schema()
+            eval_schema = ImageEvalResponse.model_json_schema()
             async with self.openai_semaphore:
                 planner_prompt = self.planner_template.render(
                     user_prompt=user_prompt,
@@ -151,7 +143,7 @@ class ImageGenPipelineClient:
                 )
                 response = await self.openai_client.responses.parse(
                     model=self.planner_model,
-                    text_format=PromptEnhancementResponse,
+                    text_format=PlanResponse,
                     input=[
                         {
                             "role": "user",

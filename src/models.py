@@ -37,7 +37,7 @@ class StructuredMetric(BaseModel):
     explanation: str = Field(description="Explanation of your judgement.")
 
 
-class ImageJudgeResponse(BaseModel):
+class ImageEvalResponse(BaseModel):
     """Response to automatic judge of a generated image."""
 
     reasoning_checklist: str = Field(description="Your reasoning checklist.")
@@ -58,7 +58,7 @@ class ImageJudgeResponse(BaseModel):
     )
 
 
-class PromptEnhancementResponse(BaseModel):
+class PlanResponse(BaseModel):
     """Prompt enhancement response."""
 
     improved_prompt: str = Field(
@@ -110,4 +110,4 @@ class AppResultsModel(BaseModel):
     plan_gen_duration_sec: float
     img_gen_duration_sec: list[float]
     img_eval_duration_sec: float
-    judge: ImageJudgeResponse
+    judge: ImageEvalResponse
