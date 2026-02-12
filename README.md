@@ -1,3 +1,4 @@
+# Interier AI Design Generation
 The solution is tasked to generate interier design based on user's textual preferences and source image. As input the program takes text + image and outputs multiple images representing different parts of user's appartments + **JSON** report file with details. The details include token usages, costs, recorded automated metrics, and durations of each operation. 
 
 This `README.md` has the following sections:
@@ -226,3 +227,7 @@ uv run pytest {tests/...file.py}
 - Checks `/generate` and `/evaluate` routes exist
 - Validates **CORS** middleware setup
 - Basic smoke test for app request handling
+
+## License
+
+This project is licensed under the **MIT License** — see the [LICENSE](./LICENSE) file for details.
