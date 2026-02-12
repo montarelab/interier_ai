@@ -217,12 +217,12 @@ uv run pytest {tests/...file.py}
 - Aggregates token usage across multiple models
 - Handles empty usage list
 - Tests **OpenAI** and **Google** usage metadata factory method
-- Tests direct UsageMetadata initialization
+- Tests direct **UsageMetadata** initialization
 
 ### Smoke Tests (5 tests)
 
 - Verifies **LangGraph** compilation succeeds
 - Verifies FastAPI app initialization
 - Checks `/generate` and `/evaluate` routes exist
-- Validates CORS middleware setup
+- Validates **CORS** middleware setup
 - Basic smoke test for app request handling
