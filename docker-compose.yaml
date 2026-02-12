@@ -11,4 +11,5 @@ services:
       - PORT=6000
     volumes:
       - ./jobs:/app/jobs
+      - ./logs:/app/logs
     restart: no

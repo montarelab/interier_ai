@@ -12,11 +12,11 @@ from fastapi import Body, FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.graph import build_graph, init_graph_state
+from src.log import setup_logging
 from src.models import EvalConfigPayload
 from src.settings import settings
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = setup_logging()
 
 DATASET_PATH = Path("dataset")
 
@@ -37,6 +37,20 @@ def remove_done_task(task: asyncio.Task):
     """Callback that runs after the background task is done. It is used in order to garbage collector didn't delete background tasks."""
     with bg_tasks_lock:
         bg_tasks_list.remove(task)
+
+
+async def run_eval(job_path: Path, tasks: list[asyncio.Task]):
+    """Run evaluation of asyncio generation tasks."""
+    results = await asyncio.gather(*tasks)
+    exceptions = [r for r in results if isinstance(r, Exception)]
+    if not exceptions:
+        return
+
+    logger.warning(f"Total exceptions: {len(exceptions)}")
+    for idx, e in enumerate(exceptions):
+        err_task_path = job_path / f"err_{idx}.txt"
+        async with aiofiles.open(err_task_path, "w") as f:
+            await f.write(str(e))
 
 
 def get_prompt_path(task: str, prompt_version: int) -> Path:
@@ -90,20 +104,6 @@ async def generate(prompt: str = Form(None), image: UploadFile = File(...)):
     except Exception:
         logger.exception(f"Error during generate request.")
         return {"status": "failed"}
-
-
-async def run_eval(job_path: Path, tasks: list[asyncio.Task]):
-    """Run evaluation of asyncio generation tasks."""
-    results = await asyncio.gather(*tasks)
-    exceptions = [r for r in results if isinstance(r, Exception)]
-    if not exceptions:
-        return
-
-    logger.warning(f"Total exceptions: {len(exceptions)}")
-    for idx, e in enumerate(exceptions):
-        err_task_path = job_path / f"err_{idx}.txt"
-        async with aiofiles.open(err_task_path, "w") as f:
-            await f.write(str(e))
 
 
 @app.post("/evaluate")
