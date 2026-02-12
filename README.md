@@ -1,10 +1,11 @@
 The solution is tasked to generate interier design based on user's textual preferences and source image. As input the program takes text + image and outputs multiple images representing different parts of user's appartments + **JSON** report file with details. The details include token usages, costs, recorded automated metrics, and durations of each operation. 
 
 This `README.md` has the following sections:
-* **solution-outline** - the explaination what was built and how
-* **how-to-run** - the commands to run the solution
-* **implementation** - the details of development
-* **future-work** - here I reflect on what can improved in the future
+* **solution-outline** - the explaination what was built and how;
+* **how-to-run** - the commands to run the solution;
+* **implementation** - the details of development;
+* **future-work** - here I reflect on what can improved in the future;
+* **testing** - tests details.
 
 ## Solution outline
 <img src="images/diagram.png"/>
@@ -130,6 +131,7 @@ The solution is containerized using **Docker** to support running in different e
 * `litellm` - LLM automatic costs calculation from token usage metadata;
 * `openai` and `google-genai` - AI API of **OpenAI** and **Google**, because **LangChain**/**LiteLLM**/**others** are either poor, or not-asynchronous, or not working for image generation as good as they are for trivial chat and text API;
 * `aiofiles` and `pydantic` - productivity: async file operations and validated models development;
+* `pytest` and `pytest-asyncio` - testing.
 
 
 ### API Design
@@ -154,8 +156,9 @@ The solution is containerized using **Docker** to support running in different e
 * `dataset` - includes 5 **tasks** for the system for each unique style. (see **Dataset and tasks**);
 * `prompts` - **Jinja2** prompt templates used for AI. They include `plan`, `img_gen`, and `eval` for the corresponding stages of workflow. Additionally, there is `dataset_gen.jinja` that I used to generate the initial dataset of prompts for my own evaluation based on **Pinterest** interier pictures. No parts of the workflow use it, but I used it my own with `gpt-5.2` and added here to keep and version once it will be needed;
 * `jobs` - system results. Each folder inside is an exact run of `/generate` or `/evaluate` determined as request's datatime + `UUID`. THere are both request and response stored inside;
-* `images` - images used in **README.md**.
-* `logs` - logs of the application.
+* `images` - images used in **README.md**;
+* `logs` - logs of the application;
+* `tests` - unit and smoke tests for the application.
 
 ### LLM models support
 Current solution supports only **Google** and **OpenAI** models because there are no unified API for any **any-to-image** AI model provider, while writing my own would be too expensive. I chose these providers as they have flagship models (see **Future work** section).
@@ -181,4 +184,45 @@ Overall, the time for the prefered generation (`gemini-2.5` + `gpt-5-mini`) requ
 * **API design #1:** As the evaluation process is considered to be long, it's unwise to wait for its full completion during the endpoint call. It'd be beneficial to create a separate endpooint `/check_status/{job_id}` that checks the status of a specific job. At the same time, all the executing jobs are stored in the cache on the DB along with their statuses.
 * **API design #2:** The main app's **Docker** container can easily scale to meet demand by creating of new instances of its image. Additional gateway needs to be implemented that will distribute load over them all. Moreover, such approach would support **canary deployment** and **rollout**, where we will be able to release updated replicas slowly and gather real metrics from them.
 * **Observaility:** Implement additional logs storing using **Prometheus** to analyze and visualize them at **Grafana**. Additionally, implement LLM calls and **LangGraph** bypasses observability using **LangSmith**.
-* **Evaluation report:** Now reports after succesful `/evaluate` are simple: we create a `results.json` file along with the supplementary files in tasks subfolders of the evaluation job. However, in the future, creation of aggregated report file with statistics and plots would improve readability. 
+* **Evaluation report:** Now reports after succesful `/evaluate` are simple: we create a `results.json` file along with the supplementary files in tasks subfolders of the evaluation job. However, in the future, creation of aggregated report file with statistics and plots would improve readability.
+
+## Testing
+
+The application includes unit and smoke tests to ensure core functionality works correctly.
+
+### Setup
+
+Install test dependencies:
+```bash
+uv pip install -e ".[dev]"
+```
+
+### Running
+
+Run all tests. (Use `-v` argument for verbosity):
+```bash
+uv run pytest tests/
+```
+
+Run specific test file:
+```bash
+uv run pytest {tests/...file.py}
+```
+
+
+
+### Unit Tests (6 tests)
+
+- Aggregates token usage for a single model
+- Aggregates token usage across multiple models
+- Handles empty usage list
+- Tests **OpenAI** and **Google** usage metadata factory method
+- Tests direct UsageMetadata initialization
+
+### Smoke Tests (5 tests)
+
+- Verifies **LangGraph** compilation succeeds
+- Verifies FastAPI app initialization
+- Checks `/generate` and `/evaluate` routes exist
+- Validates CORS middleware setup
+- Basic smoke test for app request handling
