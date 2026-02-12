@@ -74,7 +74,9 @@ The **graph architecture** has several components that were not described at the
 
 
 ### RAG & Storage
-I did not implement **RAG (Retrieval-augmented-generation)**, nor use **vector databases** because they're architecturally redundant points to provide high-quality interier design images. The images and results are stored locally in the file system as a good starting point.
+I did not implement **RAG (Retrieval-augmented-generation)**, nor use **vector databases** because they're architecturally redundant points to provide high-quality interier design images so far. The images and results are stored locally in the file system as a good starting point. 
+
+However, there is one point, where **RAG** can be suitable. It's a real case, when Image generation model cannot create appropriate appertment image because it might not be aware of how specific furniture looks like, such that images are not realistic. **RAG** can be helpful here, because we can store images of different furniture along with their descriptions, and retrieve them by taking the most similar descriptions to the user's prompt, and feed the AI model with furniture images as the result. Later on, this architecture might be extended to **AI agent** application, where the specific agent will look for images in the web to take the most appropriate for unique cases (i.e. if the **similarity score** is less than the **threshold**).
 
 ### Caching
 
